@@ -1,16 +1,14 @@
 import os
+from audio_separator.separator import Separator
 import sys
 import torch
 import librosa
 import logging
 import warnings
-
 import numpy as np
 import soundfile as sf
-
 warnings.filterwarnings("ignore")
 sys.path.append(os.getcwd())
-
 from modules import fairseq
 from modules.config import Config
 from modules.cut import cut, restore
@@ -21,6 +19,91 @@ from modules.utils import check_predictors, check_embedders, load_audio
 
 for l in ["torch", "faiss", "omegaconf", "httpx", "httpcore", "faiss.loader", "numba.core", "urllib3", "transformers", "matplotlib"]:
     logging.getLogger(l).setLevel(logging.ERROR)
+
+
+
+
+
+def separate_audio_tracks(
+    input_path: str,
+    output_dir: str = "output",
+    model_vocals_instrumental: str = 'model_bs_roformer_ep_317_sdr_12.9755.ckpt',
+    model_deecho_dereverb: str = 'UVR-DeEcho-DeReverb.pth',
+    model_backing_vocals: str = 'mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt'
+) -> dict:
+    """
+    Separate audio tracks into multiple components.
+    
+    Args:
+        input_path: Path to input audio file
+        output_dir: Directory to save output files
+        model_vocals_instrumental: Model filename for vocals/instrumental separation
+        model_deecho_dereverb: Model filename for de-echo/de-reverb
+        model_backing_vocals: Model filename for backing vocals separation
+    
+    Returns:
+        Dictionary with paths to all separated tracks
+    """
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Initialize paths for output files
+    paths = {
+        'vocals': os.path.join(output_dir, 'Vocals.wav'),
+        'instrumental': os.path.join(output_dir, 'Instrumental.wav'),
+        'vocals_reverb': os.path.join(output_dir, 'Vocals (Reverb).wav'),
+        'vocals_no_reverb': os.path.join(output_dir, 'Vocals (No Reverb).wav'),
+        'lead_vocals': os.path.join(output_dir, 'Lead Vocals.wav'),
+        'backing_vocals': os.path.join(output_dir, 'Backing Vocals.wav')
+    }
+    
+    try:
+        # Initialize separator
+        separator = Separator(output_dir=output_dir)
+        
+        # Step 1: Splitting into Vocal and Instrumental
+        print("Step 1: Separating vocals and instrumental...")
+        separator.load_model(model_filename=model_vocals_instrumental)
+        voc_inst = separator.separate(input_path)
+        
+        # Rename output files
+        os.rename(os.path.join(output_dir, voc_inst[0]), paths['instrumental'])
+        os.rename(os.path.join(output_dir, voc_inst[1]), paths['vocals'])
+        print(f"✓ Instrumental saved to: {paths['instrumental']}")
+        print(f"✓ Vocals saved to: {paths['vocals']}")
+        
+        # Step 2: Applying DeEcho-DeReverb to Vocals
+        print("\nStep 2: Applying DeEcho-DeReverb to vocals...")
+        separator.load_model(model_filename=model_deecho_dereverb)
+        voc_no_reverb = separator.separate(paths['vocals'])
+        
+        # Rename output files
+        os.rename(os.path.join(output_dir, voc_no_reverb[0]), paths['vocals_no_reverb'])
+        os.rename(os.path.join(output_dir, voc_no_reverb[1]), paths['vocals_reverb'])
+        print(f"✓ Vocals (No Reverb) saved to: {paths['vocals_no_reverb']}")
+        print(f"✓ Vocals (Reverb) saved to: {paths['vocals_reverb']}")
+        
+        # Step 3: Separating Back Vocals from Main Vocals
+        print("\nStep 3: Separating lead and backing vocals...")
+        separator.load_model(model_filename=model_backing_vocals)
+        backing_voc = separator.separate(paths['vocals_no_reverb'])
+        
+        # Rename output files
+        os.rename(os.path.join(output_dir, backing_voc[0]), paths['backing_vocals'])
+        os.rename(os.path.join(output_dir, backing_voc[1]), paths['lead_vocals'])
+        print(f"✓ Backing Vocals saved to: {paths['backing_vocals']}")
+        print(f"✓ Lead Vocals saved to: {paths['lead_vocals']}")
+        
+        print("\n✅ Audio separation completed successfully!")
+        return paths
+        
+    except Exception as e:
+        print(f"❌ Error during audio separation: {str(e)}")
+        raise
+
+
+
 
 def run_inference_script(
     is_half=False, 
